@@ -133,7 +133,7 @@ class AbstractSpellChecker(AbstractTokenizer):
         return {deviation for deviation in all_deviations if deviation_to_count[deviation]}
 
     def _words_that_exist(self, words):
-        return set(w for w in words if self.get_count_for_token(w))
+        return {w for w in words if self.get_count_for_token(w)}
 
     def train_from_strings(self, input_string_list):
         """ Mutates the class such that input text from the user can be
@@ -210,7 +210,7 @@ class AbstractAutoCompleter(AbstractSpellChecker):
         for full_string, score in full_string__scores:
             collapsed_string_to_score[full_string] += score
             collapsed_string_to_occurence[full_string] += 1
-        for full_string in collapsed_string_to_score.keys():
+        for full_string in collapsed_string_to_score:
             percent_match = collapsed_string_to_occurence[full_string] / float(num_tokens)
             collapsed_string_to_score[full_string] *= percent_match
         return collapsed_string_to_score
@@ -345,9 +345,7 @@ class RedisStorageTokenizer(AbstractTokenizer):
         self.use_pipeline = use_pipeline
 
     def get_client(self):
-        if self.use_pipeline:
-            return self.redis_client.pipeline()
-        return self.redis_client
+        return self.redis_client.pipeline() if self.use_pipeline else self.redis_client
 
     def get_full_strings_for_token(self, token, default_empty=None):
         try:
@@ -364,7 +362,7 @@ class RedisStorageTokenizer(AbstractTokenizer):
         client = self.get_client()
         for key, full_strings_set in iteritems(token_to_full_string_dict):
             for full_string in full_strings_set:
-                client.sadd("token:" + key, full_string)
+                client.sadd(f"token:{key}", full_string)
             client.sadd("token_to_full_string_keys", key)
         if self.use_pipeline:
             client.execute()
@@ -373,13 +371,13 @@ class RedisStorageTokenizer(AbstractTokenizer):
         key_count = self.redis_client.scard("n_gram_to_token_key")
         if not key_count:
             raise RequiresTraining("Must call train_from_strings() before using this property")
-        return self.redis_client.smembers("n_gram:" + n_gram) or default_empty
+        return self.redis_client.smembers(f"n_gram:{n_gram}") or default_empty
 
     def _store_n_gram_to_tokens(self, n_gram_to_tokens_dict):
         client = self.get_client()
         for n_gram, token_set in iteritems(n_gram_to_tokens_dict):
             for token in token_set:
-                client.sadd("n_gram:" + n_gram, token)
+                client.sadd(f"n_gram:{n_gram}", token)
             client.sadd("n_gram_to_token_key", n_gram)
         if self.use_pipeline:
             client.execute()
@@ -418,17 +416,13 @@ class RedisStorageSpellChecker(RedisStorageTokenizer, AbstractSpellChecker):
         key_count = self.redis_client.scard("token_to_count_key")
         if not key_count:
             raise RequiresTraining("Must call train_from_strings() before using this property")
-        listified_tokens = [token for token in token_list]
-        keys = ["count:%s" % token for token in listified_tokens]
+        listified_tokens = list(token_list)
+        keys = [f"count:{token}" for token in listified_tokens]
         values = self.redis_client.mget(keys)
         token_to_count = {}
         for index, token in enumerate(listified_tokens):
 
-            if index >= len(values):
-                # edge case for certain redis wrappers apparently
-                redis_value = 0
-            else:
-                redis_value = int(values[index] or 0)
+            redis_value = 0 if index >= len(values) else int(values[index] or 0)
             token_to_count[token] = redis_value
         return token_to_count
 
@@ -441,13 +435,13 @@ class RedisStorageSpellChecker(RedisStorageTokenizer, AbstractSpellChecker):
         key_count = self.redis_client.scard("token_to_count_key")
         if not key_count:
             raise RequiresTraining("Must call train_from_strings() before using this property")
-        count = self.redis_client.get("count:" + token) or default_empty
+        count = self.redis_client.get(f"count:{token}") or default_empty
         return int(count)
 
     def _store_token_to_count(self, token_to_count_dict):
         client = self.get_client()
         for token, count in iteritems(token_to_count_dict):
-            count_key = "count:" + token
+            count_key = f"count:{token}"
             client.incr(count_key, count)
             client.sadd("token_to_count_key", token)
         if self.use_pipeline:
